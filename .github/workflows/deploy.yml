@@ -1,0 +1,74 @@
+name: Deploy
+
+# Builds the web app from the PRIVATE app repo and publishes the result to
+# this repo's main branch, which GitHub Pages serves. Lives here (not in the
+# app repo) because public-repo Actions minutes are free — the same reason
+# daily-news runs in cantoreader-data.
+#
+# Requires one secret on THIS repo:
+#   APP_REPO_TOKEN — fine-grained PAT, contents:read on Hon-Luu/cantoreader-app
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 23 * * 0"   # weekly sweep; dispatch manually after app pushes
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+
+      - name: Check out the app repo (private, read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: Hon-Luu/cantoreader-app
+          token: ${{ secrets.APP_REPO_TOKEN }}
+          path: app
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Emit web data (offline; station-id fixture is a hard gate)
+        working-directory: app
+        run: python3 build_reader.py --web-out web/public/data
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test and build
+        working-directory: app/web
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: Publish to main
+        run: |
+          set -euo pipefail
+          rsync -a --delete \
+            --exclude .git --exclude .github --exclude .nojekyll \
+            --exclude README.md \
+            app/web/dist/ .
+          rm -rf app
+          git config user.name "cantoreader-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes — nothing to deploy."
+          else
+            git commit -m "Deploy $(date -u +%FT%TZ)"
+            git push
+          fi
