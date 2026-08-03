@@ -58,11 +58,15 @@ jobs:
       - name: Publish to main
         run: |
           set -euo pipefail
+          # Move the build OUT of the workspace before rsync --delete runs
+          # against it — deleting app/ mid-transfer is how run 1 died
+          # ("some files vanished", rsync exit 24).
+          mv app/web/dist /tmp/site
+          rm -rf app
           rsync -a --delete \
             --exclude .git --exclude .github --exclude .nojekyll \
             --exclude README.md \
-            app/web/dist/ .
-          rm -rf app
+            /tmp/site/ .
           git config user.name "cantoreader-bot"
           git config user.email "actions@users.noreply.github.com"
           git add -A
